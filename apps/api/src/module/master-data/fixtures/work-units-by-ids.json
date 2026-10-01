@@ -1,0 +1,70 @@
+{
+  "_comment": [
+    "Drift guard for GET /v1/work-units?ids= on mes-master-data.",
+    "",
+    "This body is built from that service's actual response shape: the column set",
+    "in work-unit-repository.ts findAll() (id, code, name, type, position,",
+    "isOeeRelevant, isAcquirable, telemetryTags, region, createdAt) plus the",
+    "`workCenter` and `class` relations, wrapped in @molca/network's",
+    "{ data, meta, error } envelope.",
+    "",
+    "It deliberately carries fields this service does NOT read, so the test proves",
+    "the narrow schema tolerates them. Refresh it from a real response whenever",
+    "mes-master-data's work-unit payload changes:",
+    "  curl -H \"Authorization: Bearer $TOKEN\" \\",
+    "    'http://localhost:3002/v1/work-units?ids=44,45,46'"
+  ],
+  "data": [
+    {
+      "id": 44,
+      "code": "WU-P1",
+      "name": "Molca Packer P",
+      "type": "work_cell",
+      "position": { "x": -30.5, "y": 12, "width": 468, "height": 362 },
+      "isOeeRelevant": true,
+      "isAcquirable": true,
+      "telemetryTags": { "line": "L3" },
+      "region": "ap3",
+      "createdAt": "2026-01-15T08:30:00.000Z",
+      "workCenter": { "id": 12, "code": "WC-03", "name": "Molca Line 3" },
+      "class": { "id": 5, "code": "packer", "name": "Packer" }
+    },
+    {
+      "id": 45,
+      "code": "WU-P2",
+      "name": "Molca Filler F",
+      "type": "unit",
+      "position": { "x": 120, "y": 12 },
+      "isOeeRelevant": true,
+      "isAcquirable": false,
+      "telemetryTags": null,
+      "region": "ap3",
+      "createdAt": "2026-01-15T08:31:00.000Z",
+      "workCenter": { "id": 12, "code": "WC-03", "name": "Molca Line 3" },
+      "class": null
+    },
+    {
+      "id": 46,
+      "code": "WU-S1",
+      "name": "Molca Store S",
+      "type": "storage_unit",
+      "position": { "x": 300, "y": 200 },
+      "isOeeRelevant": false,
+      "isAcquirable": false,
+      "telemetryTags": null,
+      "region": "ap3",
+      "createdAt": "2026-01-15T08:32:00.000Z",
+      "workCenter": null,
+      "class": null
+    }
+  ],
+  "meta": {
+    "page": 1,
+    "size": 100,
+    "totalElements": 3,
+    "totalPages": 1,
+    "first": true,
+    "last": true
+  },
+  "error": null
+}

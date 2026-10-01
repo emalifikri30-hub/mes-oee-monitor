@@ -1,0 +1,19 @@
+# The only datasource. Provisioned rather than clicked, so a fresh `docker compose
+# up` lands on a working dashboard instead of an empty "add your first datasource".
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    # An EXPLICIT uid, so the checked-in dashboard can reference it directly.
+    # Without one Grafana generates a random uid per install, and a dashboard
+    # referencing a `${DS_...}` template variable instead renders every panel as
+    # "Datasource not found" until somebody picks it from a dropdown — which a
+    # provisioned dashboard should never require.
+    uid: prometheus
+    access: proxy
+    # The compose service name, not localhost: Grafana reaches Prometheus across
+    # the compose network, and localhost inside that container is Grafana itself.
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

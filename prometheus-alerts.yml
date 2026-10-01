@@ -1,0 +1,299 @@
+# The alert rules `apps/api/src/shared/observability/metrics.ts` has been
+# describing all along.
+#
+# WHY THIS FILE DID NOT EXIST UNTIL NOW
+#
+# Every instrument in that file carries a `// Alert on:` comment naming the PromQL
+# that should page somebody. Nothing consumed any of it — the alerting design lived
+# entirely as prose in code comments, which is the same failure mode as an
+# undocumented decision, inverted. TODOS.md §39.
+#
+# THE METRIC NAMES HERE WERE READ OFF THE COLLECTOR, NOT GUESSED
+#
+# Metrics reach Prometheus through the OTel Collector's `prometheus` exporter,
+# which rewrites names. Two things were verified by emitting one sample of each
+# instrument and reading `:8889/metrics` rather than by assuming:
+#
+#   * Counters pass through UNCHANGED. `downtime_edits_total` stays
+#     `downtime_edits_total` — the exporter does not append a second `_total` to a
+#     name that already ends in one, which was the risk worth checking.
+#   * Histograms become THREE series: `_bucket`, `_count` and `_sum`. So the
+#     `histogram_quantile(0.99, downtime_reason_groups)` in metrics.ts was never
+#     runnable PromQL — a quantile needs the bucket vector, grouped by `le`. The
+#     rule below is the corrected form.
+#
+# WHAT IS AND IS NOT ALERTABLE HERE
+#
+# Most of these fire on a screen that looks entirely healthy.
+# `product_count_empty_total` and its three siblings count a report rendering "not
+# loaded yet" — the server answers 200, logs nothing alarming, and a supervisor
+# sees a plausible empty card. That is the whole reason the counters exist, and
+# until this file they were the only evidence and nobody was reading it.
+#
+# DELIBERATELY NOT ALERTED: 404s and request volume. A bad id is a bad request, not
+# a data gap, and metrics.ts states that rule per-counter.
+#
+# `for:` IS SET ON EVERY RULE. Without it a single scrape of a transient blip pages
+# somebody; these are all "this has been true for a while" conditions.
+
+groups:
+  - name: operator-mutations
+    interval: 1m
+    rules:
+      # THE SHARPEST SIGNAL IN THIS FILE. `cause="restated"` means the pipeline
+      # reloaded a downtime while somebody was editing it. The operator's next
+      # instinct is to retry, which would overwrite a fresh upstream correction —
+      # so a non-zero rate here is an argument for the recalculation trigger
+      # (TODOS.md §38), not for a wider retry window.
+      - alert: DowntimeEditRestatedByPipeline
+        expr: rate(downtime_edit_conflicts_total{cause="restated"}[1h]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: The pipeline is reloading downtimes while operators edit them
+          description: >-
+            A downtime edit was refused because the pipeline restated the row underneath the
+            dialog. Retrying would overwrite whatever upstream just corrected. If this is not
+            isolated, the shift-scoped recalculation trigger in TODOS.md 38 is the fix rather
+            than a longer retry.
+
+      # A 409 or 412 means the browser offered an action that was not available,
+      # which is a STALE CACHE. The server answers correctly and looks healthy, so
+      # this counter is the only thing that would ever say so.
+      - alert: ShiftReportTransitionConflicts
+        expr: rate(shift_report_transition_conflicts_total[1h]) > 0
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: Approve or reopen is being offered on reports that have already moved
+          description: >-
+            The browser is showing a stale approval status somewhere. Check whether a page is
+            caching the report list past its invalidation.
+
+      # NOT an error condition — it is the feature working. Present so the dashboard
+      # has a rate to draw and so "has anybody ever used this?" has an answer, which
+      # matters while the feature is still nearly dark (TODOS.md 19).
+      - alert: DowntimeEditsNeverHappen
+        expr: absent(downtime_edits_total)
+        for: 24h
+        labels:
+          severity: info
+        annotations:
+          summary: No downtime has ever been edited
+          description: >-
+            Expected until the pipeline populates source_event_id (TODOS.md 19), because a stop
+            without one cannot be addressed. If that has landed and this is still firing, the
+            write path is unreachable rather than merely unused.
+
+      # THE ROLLOUT ALARM FOR TODOS.md 34, and the reason that entry could ship at
+      # all. A role name Keycloak does not emit 403s only the three write paths:
+      # every read keeps working, every page renders, the OEE numbers are right,
+      # and an operator finds out at the end of a shift when Approve stops working.
+      #
+      # TWO RULES, because a denial is not automatically a fault. Once a gate is
+      # deliberately on, refusing somebody without the role IS the gate working.
+      # What is never right is EVERY attempt on one action being refused while none
+      # succeeds, which is what a wrong role name looks like.
+      #
+      # THE JOIN IS AGAINST grants_total AND NOT AGAINST THE MUTATION COUNTERS,
+      # which was the first attempt and was silently wrong. `unless on (action)`
+      # needs the same label on both sides; shift_report_transitions_total is
+      # {to, source} and downtime_edits_total is {field}, so `sum by (action)` over
+      # either yields a series with no action label — which cancels NOTHING.
+      # Checked against a live Prometheus rather than reasoned about: the left
+      # series survives, so this rule would have fired CRITICAL on every ordinary
+      # denial while reading perfectly sensibly.
+      - alert: OperatorRoleGateRefusingEveryone
+        expr: >-
+          sum by (action) (rate(operator_authorization_denials_total[15m])) > 0
+          unless on (action) sum by (action) (rate(operator_authorization_grants_total[15m])) > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Every {{ $labels.action }} attempt is being refused by the role gate
+          description: >-
+            No attempt at this mutation has succeeded while denials continue, which is what a
+            role name the realm does not emit looks like. Check APPROVE_ROLE / REOPEN_ROLE /
+            EDIT_DOWNTIME_ROLE against realm_access.roles on a real operator token. Rollback is
+            unsetting the variable. Note that client roles under resource_access are NOT read.
+
+      # The ordinary case: somebody without the role tried, among people who have
+      # it. Worth seeing during a rollout, not worth waking anyone for.
+      - alert: OperatorRoleGateDenials
+        expr: rate(operator_authorization_denials_total[1h]) > 0
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: Operators are being refused {{ $labels.action }} by the role gate
+          description: >-
+            Some callers lack the configured role. Expected while a gate is being rolled out or
+            when someone genuinely should not have access. If NOBODY is succeeding, the critical
+            rule above is the one that matters.
+
+  # The four counters whose entire purpose is to surface a defect that renders as a
+  # perfectly reasonable screen. Long windows, because "this table has not loaded"
+  # is a pipeline-cadence problem, not a per-request one.
+  - name: empty-payloads
+    interval: 5m
+    rules:
+      - alert: ProductCountEmpty
+        expr: rate(product_count_empty_total[1h]) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Reports are rendering with no product output
+          description: >-
+            A SKU breakdown returned nothing for a report. The card says "not loaded yet"
+            rather than claiming an idle machine, but a supervisor sees an empty card either
+            way. CHECK THE `grain` LABEL BEFORE OPENING A TABLE: absent means the shift path
+            and oee.product_count_wu_shift; day or month means oee.product_count_wu_day,
+            which the coarser screens read for both.
+
+      - alert: PerfHourEmpty
+        expr: rate(perf_hour_empty_total[1h]) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: The Performance Loss tab has no hourly data
+          description: >-
+            oee.product_perf_wu_hour returned nothing for a report. The `grain` label says
+            which screen asked: absent is the shift dialog (8 buckets), `day` is the By Day
+            one (24). The same table serves both — only the window differs — so a firing
+            that names one grain and not the other points at a business day rather than at
+            the table.
+
+      - alert: RejectReasonEmpty
+        expr: rate(reject_reason_empty_total[1h]) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: The Quality Loss tab has no reject data
+          description: >-
+            oee.reject_count_wu_shift returned nothing. Expected while that table is
+            unpopulated (contract 3.8); it should stop once the model lands.
+
+      - alert: DowntimeEventEmpty
+        expr: rate(downtime_event_empty_total[1h]) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: The Others tab has no downtime events
+          description: >-
+            oee.downtime_log_events returned nothing. Expected while that table is unpopulated
+            (contract 3.9).
+
+  - name: data-quality
+    interval: 1m
+    rules:
+      # A dropped row is a stop the timeline could not place — it did not vanish
+      # from the database, it vanished from the CHART, which nothing on screen says.
+      #
+      # THIS ALERT GOT WEAKER ON 2026-09-02 AND A SILENT ZERO IS NOT REASSURANCE.
+      # Inverted rows (end_at < start_at) used to fire it; since TODOS.md §10/§69
+      # they are excluded by the membership predicate itself and never reach the
+      # counter. What still fires it is an empty clip — an open stop against a
+      # window that has not started. See metrics.ts, and TODOS.md §70 for the
+      # table-wide check that should replace the lost half.
+      - alert: DowntimeRowsDropped
+        expr: rate(downtime_rows_dropped_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Downtime rows are being dropped from the timeline
+          description: >-
+            A stop could not be clipped into its shift window — an open stop against a window
+            that has not started, or a window that resolved wrong. The strip renders without it
+            and says nothing. Inverted rows no longer reach this counter (TODOS.md §70).
+
+      # A failed zone resolution means a shift window built from the wrong offset,
+      # which silently attributes stops to the wrong shift. TimeZoneResolver serves
+      # stale on failure, so the request SUCCEEDS.
+      - alert: TimeZoneResolutionFailures
+        expr: rate(time_zone_resolutions_total{outcome="failed"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Plant time zones cannot be resolved from master data
+          description: >-
+            Shift windows are being built from a stale or defaulted zone, which moves the 23:00
+            boundary and misattributes stops between shifts. The requests still return 200.
+
+      # THE CORRECTED FORM of metrics.ts's annotation. A quantile needs the bucket
+      # series and a `sum by (le)`; the comment's version was prose.
+      - alert: DowntimeReasonGroupsHigh
+        expr: histogram_quantile(0.99, sum by (le) (rate(downtime_reason_groups_bucket[30m]))) > 50
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: One shift is producing an unusual number of distinct downtime reasons
+          description: >-
+            /downtimes/by-reason is unpaged and the browser holds the whole response, so this
+            is the signal that the bound is being approached. TODOS.md 25 holds the widening.
+
+  - name: upstream
+    interval: 1m
+    rules:
+      # THE ONE NO OTHER SIGNAL CATCHES. A stale serve means upstream is down and a
+      # filter is being drawn from a list of known-old data: the request SUCCEEDS,
+      # the status is 200, nothing logs an error, and the dropdown may offer a work
+      # center that has since been renamed or removed. MasterDataRequestFailures
+      # below catches the upstream failure; only this says a USER saw the
+      # consequence. TODOS.md §7.
+      - alert: MasterDataServedStale
+        expr: rate(master_data_cache_total{outcome="stale"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Reference lists are being served from cache while upstream is down
+          description: >-
+            Area or work-center dropdowns are being built from the last known good list. Options
+            may name something that no longer exists. Bounded by the 5-minute ttl, and it clears
+            on its own once mes-master-data recovers.
+
+      # Nothing was ever cached AND upstream is down, so there is no list to fall
+      # back to and the request 502s. Distinct from a stale serve: this one the
+      # user sees as a failure.
+      - alert: MasterDataCacheColdAndFailing
+        expr: rate(master_data_cache_total{outcome="failed"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Reference lists are unavailable with nothing cached to fall back on
+          description: >-
+            Usually means mes-master-data was already down when this service started, so no list
+            was ever cached. Every filter on the report screens is empty.
+
+      - alert: MasterDataRequestFailures
+        expr: rate(master_data_requests_total{outcome!="ok"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: mes-master-data is failing or timing out
+          description: >-
+            Work-unit and work-center lookups are failing. Screens degrade rather than error,
+            so this is the only signal.
+
+      # p99 latency, not a failure rate: the client serves stale on failure, so a
+      # slow upstream shows up as a slow screen rather than an error.
+      - alert: MasterDataSlow
+        expr: histogram_quantile(0.99, sum by (le) (rate(master_data_request_duration_ms_bucket[15m]))) > 2000
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: mes-master-data p99 is above 2s
+          description: Every report screen resolves a time zone through it before it can render.

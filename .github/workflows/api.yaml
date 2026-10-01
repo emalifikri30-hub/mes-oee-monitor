@@ -1,0 +1,193 @@
+name: api
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/api/**"
+      - "packages/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/api.yaml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/api/**"
+      - "packages/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/api.yaml"
+  workflow_dispatch:
+
+concurrency:
+  group: api-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: 22
+  APP: api
+  IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/api-mes-oee-monitor
+
+jobs:
+  install-deps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      # Warms the pnpm-store cache (keyed on pnpm-lock.yaml by setup-node) so the
+      # parallel check/test/build jobs install from cache.
+      # @molca/mes is a private git+ssh dependency; pnpm cannot fetch it without
+      # an agent. Requires the repo secret MES_SHARED_DEPLOY_KEY (a read-only
+      # deploy key on molca-id/mes-shared).
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.MES_SHARED_DEPLOY_KEY }}
+      - run: pnpm install --frozen-lockfile
+
+  check:
+    needs: install-deps
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      # @molca/mes is a private git+ssh dependency; pnpm cannot fetch it without
+      # an agent. Requires the repo secret MES_SHARED_DEPLOY_KEY (a read-only
+      # deploy key on molca-id/mes-shared).
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.MES_SHARED_DEPLOY_KEY }}
+      - run: pnpm install --frozen-lockfile --prefer-offline
+      # Build the @molca/* workspace deps first — type-aware check resolves their
+      # types from each dep's built dist (gitignored, so absent on a fresh checkout).
+      - run: pnpm --filter "${APP}^..." run build
+      - run: pnpm --filter ${{ env.APP }} run check
+
+  test:
+    needs: install-deps
+    runs-on: ubuntu-latest
+    # A throwaway Gold database for the integration suite.
+    #
+    # downtime-repository.integration.test.ts is SKIPPED unless
+    # GOLD_TEST_DATABASE_URL is set, so a developer without Docker still gets a
+    # green `vp test`. In CI it must run: the reason aggregate clips stops to the
+    # shift window arithmetically, and the hand-rolled `fakeSql` fake can assert
+    # the SQL text but never a result — a clip yielding seconds instead of
+    # milliseconds, or LEAST/GREATEST with their bounds swapped, does not throw.
+    # It renders a plausible Pareto. See TODOS.md.
+    #
+    # postgres:18-alpine MATCHES THE DEPLOYED GOLD DATABASE, which is what this
+    # has to track. It used to say "matches the `postgres` service in
+    # docker-compose.yml" — true, and the wrong reference point: both were pinned
+    # to 16 while the database these migrations actually run against is 18.4, two
+    # majors ahead. Integration tests exist here to catch what unit tests cannot,
+    # and a major-version gap is precisely the class of thing they would miss by
+    # being right about the wrong server. TODOS.md §43.
+    services:
+      gold:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gold_test
+        ports:
+          - 5432:5432
+        # Without this the first migration can race the server's own startup
+        # restart, which postgres does after initdb.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      GOLD_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/gold_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      # @molca/mes is a private git+ssh dependency; pnpm cannot fetch it without
+      # an agent. Requires the repo secret MES_SHARED_DEPLOY_KEY (a read-only
+      # deploy key on molca-id/mes-shared).
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.MES_SHARED_DEPLOY_KEY }}
+      - run: pnpm install --frozen-lockfile --prefer-offline
+      - run: pnpm --filter "${APP}^..." run build
+      # The real runner against the real DDL, which is the point: the schema the
+      # tests query is the one checked in, not a fixture that could drift from it.
+      - name: Apply the Gold schema
+        run: pnpm --filter ${{ env.APP }} run db:migrate
+        env:
+          GOLD_DATABASE_URL: postgres://postgres:postgres@localhost:5432/gold_test
+      - run: pnpm --filter ${{ env.APP }} run test
+
+  build:
+    needs: install-deps
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      # @molca/mes is a private git+ssh dependency; pnpm cannot fetch it without
+      # an agent. Requires the repo secret MES_SHARED_DEPLOY_KEY (a read-only
+      # deploy key on molca-id/mes-shared).
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.MES_SHARED_DEPLOY_KEY }}
+      - run: pnpm install --frozen-lockfile --prefer-offline
+      # `${APP}...` builds the app AND its workspace deps in topological order.
+      - run: pnpm --filter "${APP}..." run build
+
+  release-image:
+    needs: [check, test, build]
+    # Build & push only on merges to main and manual runs — never on PRs.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      # The image build fetches @molca/mes over git+ssh via BuildKit's
+      # --mount=type=ssh, which forwards THIS job's agent. Without an agent here
+      # buildx fails before the build starts:
+      #   invalid empty ssh agent socket: make sure SSH_AUTH_SOCK is set
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.MES_SHARED_DEPLOY_KEY }}
+      # Requires repo secrets DOCKERHUB_USERNAME + DOCKERHUB_TOKEN and the
+      # repo variable DOCKERHUB_NAMESPACE. Until they exist this step fails — see README.
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+      - uses: docker/build-push-action@v6
+        with:
+          ssh: default
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,0 +1,21 @@
+{
+  "name": "template-api-with-bff",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "ready": "vp check && vp run -r test && vp run -r build",
+    "dev:all": "vp run --filter='*' dev",
+    "dev:web": "vp run web#dev",
+    "dev:bff": "vp run bff#dev",
+    "dev:api": "vp run api#dev",
+    "prepare": "vp config"
+  },
+  "devDependencies": {
+    "vite-plus": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "packageManager": "pnpm@11.8.0"
+}

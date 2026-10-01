@@ -1,0 +1,587 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": false,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "id": 101,
+      "type": "row",
+      "title": "Operator mutations \u2014 the two writes this service makes",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "id": 102,
+      "type": "timeseries",
+      "title": "Downtime fields edited",
+      "description": "ONE INCREMENT PER CHANGED FIELD, which is the grain oee.downtime_report_history is written at \u2014 so this and the trail can be reconciled against each other. Flat at zero is the EXPECTED state until the pipeline populates source_event_id (TODOS.md 19): a stop without one cannot be addressed, so the browser disables the action.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (field) (rate(downtime_edits_total[$__rate_interval]))",
+          "legendFormat": "{{field}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {}
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 103,
+      "type": "timeseries",
+      "title": "Downtime edits refused, by cause",
+      "description": "approved = a 409 against a signed-off report, which is the freeze working. concurrent = two operators, resolved by the optimistic guard. RESTATED IS THE ONE TO WATCH: the pipeline reloaded the row mid-edit, and the operator's instinct \u2014 retry \u2014 would overwrite a fresh upstream correction. A sustained rate there argues for TODOS.md 38, not a longer retry.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (cause) (rate(downtime_edit_conflicts_total[$__rate_interval]))",
+          "legendFormat": "{{cause}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {}
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 104,
+      "type": "timeseries",
+      "title": "Approval transitions",
+      "description": "to=closed is an approve, to=open a reopen. source will read `system` when the 14-day sweeper lands (TODOS.md 31) with no new instrument needed \u2014 which is why this is one counter with labels rather than four counters.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (to, source) (rate(shift_report_transitions_total[$__rate_interval]))",
+          "legendFormat": "{{to}} / {{source}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {}
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 105,
+      "type": "timeseries",
+      "title": "Stale-cache conflicts (409/412)",
+      "description": "THE SIGNAL IS NOT 'users double-click'. A conflict means the browser OFFERED an action that was not available \u2014 a stale cache \u2014 and the server answered perfectly correctly and looked entirely healthy while doing it. These counters are the only thing that would ever say so.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(shift_report_transition_conflicts_total[$__rate_interval]))",
+          "legendFormat": "transitions",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(downtime_edit_conflicts_total[$__rate_interval]))",
+          "legendFormat": "downtime edits",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {}
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 106,
+      "type": "stat",
+      "title": "Has anything ever been edited?",
+      "description": "Zero is expected today and is not a fault: source_event_id is unpopulated, so the write path is unreachable rather than unused. Once TODOS.md 19 lands, a persistent zero here means something is wrong with the path rather than with the data.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(downtime_edits_total[$__range])) or vector(0)",
+          "legendFormat": "field changes in range",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 107,
+      "type": "row",
+      "title": "Empty payloads \u2014 defects that render as a reasonable screen",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "panels": []
+    },
+    {
+      "id": 108,
+      "type": "timeseries",
+      "title": "Reports rendering with nothing loaded",
+      "description": "EVERY ONE OF THESE IS A 200. The screen says 'not loaded yet' rather than claiming a clean shift \u2014 which is honest but still shows a supervisor an empty card. reject and downtime-event lines are EXPECTED to be non-zero until contract 3.8 and 3.9 populate their tables.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 16
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(product_count_empty_total[$__rate_interval]))",
+          "legendFormat": "product count (SKU View)",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(perf_hour_empty_total[$__rate_interval]))",
+          "legendFormat": "perf hours (Performance Loss)",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(reject_reason_empty_total[$__rate_interval]))",
+          "legendFormat": "rejects (Quality Loss)",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(downtime_event_empty_total[$__rate_interval]))",
+          "legendFormat": "downtime events (Others)",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {}
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 109,
+      "type": "timeseries",
+      "title": "Distinct downtime reasons per shift (p99)",
+      "description": "/downtimes/by-reason is UNPAGED and the browser holds the whole response \u2014 bounded by construction at work-unit grain, and not bounded at line or area grain. This is the signal that widening it (TODOS.md 25) is becoming necessary.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 16
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(downtime_reason_groups_bucket[$__rate_interval])))",
+          "legendFormat": "p99",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {}
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 110,
+      "type": "row",
+      "title": "Data quality \u2014 silent wrongness",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "panels": []
+    },
+    {
+      "id": 111,
+      "type": "timeseries",
+      "title": "Downtime rows dropped from the timeline",
+      "description": "A dropped stop did not vanish from the database, it vanished from the CHART \u2014 an open stop against a window that has not started, or a window that resolved wrong. The strip renders without it and says nothing at all. NOTE: inverted rows (end_at before start_at) stopped reaching this counter on 2026-09-02, when the membership predicate began excluding them in Postgres (TODOS.md \u00a710 / \u00a769). A flat zero here is not proof the data is clean \u2014 \u00a770 carries the table-wide check.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 25
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(downtime_rows_dropped_total[$__rate_interval]))",
+          "legendFormat": "dropped",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {}
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 112,
+      "type": "timeseries",
+      "title": "Time-zone resolution outcomes",
+      "description": "A FAILED RESOLUTION STILL RETURNS 200, because TimeZoneResolver serves stale rather than erroring. The consequence is a shift window built from the wrong offset, which moves the 23:00 boundary and misattributes stops between shifts \u2014 the exact class of bug that produced a real shift-3 defect.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 25
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (outcome) (rate(time_zone_resolutions_total[$__rate_interval]))",
+          "legendFormat": "{{outcome}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {}
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 113,
+      "type": "timeseries",
+      "title": "Timeline segments per request (p99)",
+      "description": "The merged strip is the result of a sweep over overlapping stops, so a sudden jump means either a genuinely fragmented shift or duplicated rows \u2014 which contract 2.1 warns is what a DAG retry produces while downtime_reports has no upsert key.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 25
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(downtime_timeline_segments_bucket[$__rate_interval])))",
+          "legendFormat": "p99",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {}
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 114,
+      "type": "row",
+      "title": "mes-master-data \u2014 every report screen goes through it",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "panels": []
+    },
+    {
+      "id": 115,
+      "type": "timeseries",
+      "title": "Request outcomes",
+      "description": "Screens DEGRADE rather than error when this fails \u2014 a name renders as an em dash, a filter comes back empty \u2014 so this is the only place the failure is visible.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 33
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (outcome) (rate(master_data_requests_total[$__rate_interval]))",
+          "legendFormat": "{{outcome}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {}
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 116,
+      "type": "timeseries",
+      "title": "Latency (p50 / p99)",
+      "description": "On the critical path of every report screen: a time zone has to be resolved before a shift window can be built, which has to happen before any downtime query can run.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 33
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(master_data_request_duration_ms_bucket[$__rate_interval])))",
+          "legendFormat": "p50",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(master_data_request_duration_ms_bucket[$__rate_interval])))",
+          "legendFormat": "p99",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {}
+        },
+        "overrides": []
+      }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["oee", "core-api"],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "OEE service \u2014 operator writes and silent failures",
+  "uid": "oee-service",
+  "version": 1,
+  "description": "The panels metrics.ts has been describing in `// Alert on:` comments since it was written. Grouped by the QUESTION each one answers rather than by subsystem, because almost every metric here exists to surface something that renders as a perfectly healthy screen. Alert rules live in prometheus-alerts.yml; TODOS.md 39 is the entry."
+}

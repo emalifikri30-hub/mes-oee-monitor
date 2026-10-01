@@ -1,0 +1,184 @@
+# Local end-to-end run of the app images on one network.
+#   docker compose up --build      # web http://localhost:8080
+#
+# Compose reads each app's .env (it strips quotes correctly, unlike `docker run --env-file`).
+# In-network service names override the localhost URLs from those .env files via `environment:`.
+#
+# Notes:
+# - `api` is the modular-monolith service: every domain module (currently
+#   work-unit, at /api/v1/work-units) runs in one process on :3002. It also calls
+#   the separately deployed mes-master-data service over HTTP for work-unit and
+#   work-center records, which compose does NOT start — point MASTER_DATA_BASE_URL
+#   at a reachable instance or those endpoints return 502.
+# - api uses DATABASE_URL from apps/api/.env. Point it at a reachable DB and run
+#   migrations separately: `pnpm --filter api db:migrate`.
+#   (An optional local `postgres` service is included under the `with-db` profile — enable
+#   with `--profile with-db` and set DATABASE_URL to postgres://postgres:postgres@postgres:5432/app.)
+# - Full OIDC login also needs the IdP's redirect URIs to match the web origin (http://localhost:8080).
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    # `.env` is gitignored and may not exist yet (copy it from your own template);
+    # required: false lets compose run without it, falling back to the values below.
+    env_file:
+      - path: apps/api/.env
+        required: false
+    environment:
+      PORT: 3002
+      OTEL_SERVICE_NAME: api
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_RESOURCE_ATTRIBUTES: service.namespace=molca,deployment.environment=docker
+      OTEL_METRIC_EXPORT_INTERVAL_MILLIS: 15000
+    depends_on:
+      - otel-collector
+    ports:
+      - "3002:3002"
+
+  bff:
+    build:
+      context: .
+      dockerfile: apps/bff/Dockerfile
+    env_file:
+      - path: apps/bff/.env
+        required: false
+    environment:
+      PORT: 3001
+      # Reach the core domain API by its service name.
+      CORE_API_BASE_URL: http://api:3002
+      # After login, send the browser back to the web origin below.
+      CLIENT_BASE_REDIRECT_URI: http://localhost:8080/
+      OTEL_SERVICE_NAME: bff
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_RESOURCE_ATTRIBUTES: service.namespace=molca,deployment.environment=docker
+      OTEL_METRIC_EXPORT_INTERVAL_MILLIS: 15000
+    depends_on:
+      - api
+      - otel-collector
+    ports:
+      - "3001:3001"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    environment:
+      BFF_UPSTREAM: http://bff:3001
+    depends_on:
+      - bff
+    ports:
+      - "8080:80"
+
+  # ---- Observability stack ----------------------------------------------
+  # Collector receives OTLP from bff + api, sends traces to Jaeger and
+  # exposes metrics for Prometheus.  Traces UI: http://localhost:16686
+  # Metrics UI: http://localhost:9090
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+      - "8889:8889" # Prometheus scrape endpoint
+    depends_on:
+      - jaeger
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686" # Jaeger UI
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # The alert rules. Mounted separately from the scrape config so a rule
+      # change does not risk the config that finds the targets.
+      - ./prometheus-alerts.yml:/etc/prometheus/prometheus-alerts.yml:ro
+    ports:
+      - "9090:9090" # Prometheus UI (Alerts tab: http://localhost:9090/alerts)
+
+  # Dashboards over the metrics Prometheus scrapes. UI: http://localhost:3005
+  #
+  # WHY IT IS HERE AT ALL. shared/observability/metrics.ts has annotated every
+  # instrument with the PromQL that should page somebody since the day it was
+  # written, and until now NOTHING consumed any of it — the alerting design existed
+  # only as prose in code comments. Prometheus evaluates those rules now, and this
+  # is where a human looks at them. TODOS.md §39.
+  #
+  # PORT 3005, not 3000: `web` owns 3000 in dev and Grafana's own default is 3000,
+  # so the obvious choice collides with the app this dashboard is about.
+  #
+  # ANONYMOUS ADMIN, and that is fine ONLY because this compose file is a local
+  # development stack. It is not a deployment manifest — there is none in this
+  # repo — so anything derived from it for a real environment must put auth back.
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      # Land on the OEE dashboard rather than an empty home page.
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/oee-service.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+    ports:
+      - "3005:3000"
+    depends_on:
+      - prometheus
+
+  # Optional local databases. Enable with: docker compose --profile with-db up --build
+  #
+  # The api talks to two medallion tiers:
+  #   gold   (postgres)   — this service's own store, read-write, migrated by
+  #                         `pnpm --filter api db:migrate`.
+  #   silver (timescaledb) — shared machine-telemetry store, READ-ONLY here.
+  postgres:
+    image: postgres:18-alpine
+    profiles: ["with-db"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: gold
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  # Silver tier. This service only reads it — the hypertables, continuous
+  # aggregates and compression/retention policies are owned by the
+  # virtual-factory repo and written by Telegraf. Seed a local instance with:
+  #   psql "postgres://postgres:postgres@localhost:5433/silver" \
+  #     -f ../vitual-factory/docs/timescale-schema.sql
+  timescaledb:
+    # STILL pg16 while Gold moved to 18, and deliberately. This container is not
+    # wired to anything: SILVER_DATABASE_URL points at the Gold database as a
+    # placeholder while Silver is in R&D (see the root README), so nothing reads
+    # it. Its version is also not this repo's call — Silver's DDL owner is the
+    # `vitual-factory` side and Flink is its writer, and timescale's image tags
+    # track the PG majors they support rather than ours. Bump it when Silver is
+    # real, with whoever owns it.
+    image: timescale/timescaledb:latest-pg16
+    profiles: ["with-db"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: silver
+    ports:
+      # 5433 on the host so it does not collide with the gold postgres above.
+      - "5433:5432"
+    volumes:
+      - tsdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
+  tsdata:

@@ -1,0 +1,26 @@
+# Keep the build context small & reproducible. node_modules and dist are
+# (re)created inside the builder stage, never copied from the host.
+**/node_modules
+**/dist
+**/dist-ssr
+
+.git
+.github
+.claude
+.vite-hooks
+
+# Secrets / local env never belong in an image.
+**/.env
+**/.env.*
+*.local
+
+# Logs & editor cruft
+*.log
+npm-debug.log*
+pnpm-debug.log*
+.DS_Store
+.vscode
+.idea
+
+# Docs aren't needed at build time
+**/*.md

@@ -1,0 +1,63 @@
+-- ---------------------------------------------------------------------------
+-- 0022 — drop oee.downtime_reports.date
+-- ---------------------------------------------------------------------------
+--
+-- TODOS.md §71. Closes the last step of §69 and the last open half of contract
+-- §22.
+--
+-- WHY THIS IS SAFE TO DO AND WHY IT IS DONE NOW RATHER THAN LATER
+--
+-- `date` was `timestamp with time zone` holding a BUSINESS DAY — the type said
+-- instant, the value was a day, and the only statement of that anywhere was a
+-- comment in shared/shift-window.ts. `0021` added the honest pair,
+-- `business_date date` + `time_zone`, beside it. This removes the old one.
+--
+-- Three things had to be true first, and all three are:
+--
+--   1. NOTHING READS IT. §69 (2026-09-02) replaced the `date` narrowing in
+--      `scopeAndWindow` and `shiftStops` with a range `&&` served by
+--      `dt_reports_span_gist`. That was its last reader in any query path.
+--   2. NOTHING IN THIS SERVICE WRITES IT. The only UPDATE this service issues
+--      against the table sets category/reason/actions/detail_reason
+--      (DowntimeWriterRepository). Every INSERT lives in a dev seed or an
+--      integration fixture, all updated in this change.
+--   3. THE PIPELINE OWNER OFFERED IT, unprompted, answering contract §22 Q2:
+--      no data has landed, the DAG is still being designed, and carrying two
+--      columns meaning the same thing costs more than removing one. Contract
+--      §23.4 generalises it — destructive changes on an empty development
+--      database are cheap, and this is the last cheap moment. After production
+--      it would need a deprecation window and a rollback plan the owner has said
+--      he will document.
+--
+-- THIS IS IRREVERSIBLE THROUGH THE RUNNER. scripts/migrate.mjs is forward-only
+-- and has no down path, so recovery is by hand: re-add the column, and the values
+-- are NOT reconstructible from `business_date` because the reverse of the cast
+-- 0021's header refused is also zone-dependent. CHECK `\conninfo` BEFORE APPLYING
+-- THIS ANYWHERE. `apps/api/.env` points GOLD_DATABASE_URL at a SHARED REMOTE
+-- database, and 0016's seed header records a guard firing against a shared
+-- database while 18 rows landed anyway.
+--
+-- THE INDEX GOES WITH IT, AND IS DROPPED EXPLICITLY. Postgres would drop
+-- `dt_reports_date_wu_idx` implicitly as a dependent object, but a silent
+-- cascade is a poor way to lose an index — naming it here is the record that it
+-- was considered and not replaced. It was
+-- `btree (date DESC, work_unit_id) WHERE end_at IS NOT NULL`, and it served the
+-- narrowing that §69 deleted. Nothing replaces it: `dt_reports_wu_idx` still
+-- covers work_unit_id alone and `dt_reports_span_gist` serves every windowed
+-- read. TODOS.md §72 holds the only open index question, which is about
+-- `product_id`.
+--
+-- NOT DROPPED HERE: `shift`. It is the same KIND of denormalisation and it looks
+-- like it belongs in this change, but `business_date` alone cannot replace it —
+-- a business day holds three shifts, and nothing else on the row says which one.
+-- Contract §21's answer means a stop cannot straddle a shift boundary, so the
+-- column is well-defined and worth keeping.
+--
+-- Plain ALTER TABLE, forward-only, per 0003's header — it FAILS LOUDLY against a
+-- drifted table rather than silently doing nothing.
+-- ---------------------------------------------------------------------------
+
+DROP INDEX oee.dt_reports_date_wu_idx;
+
+ALTER TABLE oee.downtime_reports
+  DROP COLUMN date;

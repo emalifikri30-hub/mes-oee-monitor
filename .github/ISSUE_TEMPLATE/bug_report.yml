@@ -1,0 +1,48 @@
+name: Bug report
+description: Report something that isn't working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for the report! Please search existing issues first to avoid duplicates.
+  - type: dropdown
+    id: app
+    attributes:
+      label: Affected app
+      options:
+        - core-api
+        - bff
+        - web
+        - repo-wide (CI / docker / tooling)
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `pnpm dev:bff`
+        2. Go to ...
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / output
+      description: Paste console output or the result of `vp env doctor`. Redact secrets.
+      render: shell
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Node version (`node -v`), pnpm version, and whether running locally or via Docker.
+    validations:
+      required: true

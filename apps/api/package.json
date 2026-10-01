@@ -1,0 +1,53 @@
+{
+  "name": "api",
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev",
+    "test": "vp test",
+    "check": "vp check",
+    "check:fix": "vp check --fix",
+    "build": "tsc && vp build",
+    "start": "node --import ./instrumentation.mjs dist/index.js",
+    "db:migrate": "node scripts/migrate.mjs"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.0.5",
+    "@hono/otel": "catalog:",
+    "@hono/zod-validator": "catalog:",
+    "@loglayer/plugin-opentelemetry": "catalog:",
+    "@loglayer/transport-pino": "catalog:",
+    "@molca/contract-client": "workspace:*",
+    "@molca/helper": "workspace:*",
+    "@molca/mes": "git+ssh://git@github.com/molca-id/mes-shared.git#v0.1.2",
+    "@molca/network": "workspace:*",
+    "@molca/observability": "workspace:*",
+    "@molca/utils": "workspace:*",
+    "@opentelemetry/api": "catalog:",
+    "@opentelemetry/exporter-metrics-otlp-proto": "catalog:",
+    "@opentelemetry/exporter-trace-otlp-proto": "catalog:",
+    "@opentelemetry/instrumentation-http": "catalog:",
+    "@opentelemetry/instrumentation-undici": "catalog:",
+    "@opentelemetry/sdk-metrics": "catalog:",
+    "@opentelemetry/sdk-node": "catalog:",
+    "awilix": "catalog:",
+    "dotenv": "catalog:",
+    "hono": "^4.12.26",
+    "jose": "catalog:",
+    "loglayer": "catalog:",
+    "openid-client": "catalog:",
+    "pino": "catalog:",
+    "pino-pretty": "catalog:",
+    "postgres": "^3.4.9",
+    "ulidx": "^2.4.1",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@hono/vite-build": "catalog:",
+    "@hono/vite-dev-server": "catalog:",
+    "@types/node": "catalog:",
+    "msw": "^2.12.7",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

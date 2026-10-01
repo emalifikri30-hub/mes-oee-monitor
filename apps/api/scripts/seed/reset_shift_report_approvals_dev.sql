@@ -1,0 +1,44 @@
+-- Reset every work-unit shift report to OPEN. DEV ONLY.
+--
+-- WHY THIS FILE IS HERE AND NOT IN migration/
+--
+-- scripts/migrate.mjs applies EVERY *.sql it finds in
+-- src/shared/database/migration/, so a file placed there would run against
+-- production on the next deploy and silently un-approve every report in the
+-- plant. The same reason 0008_reject_count_dev.sql and
+-- 0009_downtime_log_events_dev.sql live in this directory.
+--
+-- Run it by hand:
+--
+--   psql "$GOLD_DATABASE_URL" -f apps/api/scripts/seed/reset_shift_report_approvals_dev.sql
+--
+-- WHY A DELETE AND NOT AN UPDATE TO 'open'
+--
+-- The ABSENCE of a row IS "open" — see 0010's header. Every reader coalesces
+-- (`coalesce(a.status, 'open')` in getShiftReport, and an INNER join in
+-- listApprovalsForPage), and the pipeline never writes this table at all, so a
+-- report that has never been approved has no row.
+--
+-- Writing `status = 'open'` instead would leave rows in a shape nothing else in
+-- the system produces. It is legal — ck_wusra_open permits it, and it is what a
+-- future reopen (TODOS.md §33) will actually do — but as a RESET it fabricates
+-- state rather than removing it.
+--
+-- WHAT THIS DELIBERATELY DOES NOT TOUCH
+--
+-- oee.work_unit_shift_report_approval_events. That table is the append-only
+-- audit trail, and an approval that happened HAPPENED — the Log Activity panel
+-- keeps showing it, which is exactly what it would do after a real reopen.
+--
+-- The consequence, so nobody reports it as a bug: after running this, a report
+-- reads "Open" while its Log Activity still lists an "open -> closed" entry.
+-- That combination is CORRECT and is what a reopened report looks like.
+--
+-- To wipe the trail as well — losing the record permanently — uncomment the
+-- second statement.
+--
+-- No transaction wrapper: one statement, and psql autocommits.
+
+DELETE FROM oee.work_unit_shift_report_approvals;
+
+-- DELETE FROM oee.work_unit_shift_report_approval_events;

@@ -1,0 +1,55 @@
+server {
+  listen 80;
+  server_name _;
+
+  root /usr/share/nginx/html;
+  index index.html;
+
+  # Proxy authenticated/session traffic to the BFF (same-origin from the browser's view).
+  location /api/ {
+    proxy_pass ${BFF_UPSTREAM};
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  location /health {
+    proxy_pass ${BFF_UPSTREAM};
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  }
+
+  # The vendored Inter files (public/fonts/). Not hashed — their names describe
+  # the face, not the bytes — so this is a week with revalidation rather than
+  # /assets/'s `immutable`: a replaced font under the same name must still reach
+  # a browser that has one, and re-downloading 133 kB of woff2 on every page
+  # load is what self-hosting the family was meant to stop.
+  location /fonts/ {
+    try_files $uri =404;
+    add_header Cache-Control "public, max-age=604800" always;
+    access_log off;
+  }
+
+  # Hashed build output — the filename changes whenever the bytes do, so it can be
+  # cached forever. `add_header Cache-Control`, not `expires`, which would emit a
+  # second and conflicting Cache-Control.
+  location /assets/ {
+    try_files $uri =404;
+    add_header Cache-Control "public, max-age=31536000, immutable" always;
+    access_log off;
+  }
+
+  # Never cache the app shell: it names the hashed asset files above, so a stale
+  # copy points at chunks that no longer exist in the new image — a blank page on
+  # deploy. The try_files below is an internal redirect, which re-enters location
+  # matching, so every client-side route (/login, and any future OEE route) picks this up too.
+  location = /index.html {
+    add_header Cache-Control "no-cache" always;
+  }
+
+  # SPA fallback: serve index.html for client-side routes.
+  location / {
+    try_files $uri $uri/ /index.html;
+  }
+}
